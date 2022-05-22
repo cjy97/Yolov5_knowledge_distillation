@@ -62,6 +62,25 @@ RANK = int(os.getenv('RANK', -1))
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 
 
+def KDLoss(t_pred, s_pred):
+    device = s_pred[0].device
+    lcls = torch.zeros(1, device=device)  # class loss
+    lbox = torch.zeros(1, device=device)  # box loss
+    lobj = torch.zeros(1, device=device)  # object loss
+
+    BCEobj = nn.BCEWithLogitsLoss()
+    BCEcls = nn.BCEWithLogitsLoss(reduction='none')
+    BCEbox = nn.MSELoss(reduction='none')
+
+    for i in range(3):
+        lobj += 3.0 * BCEobj(s_pred[i][..., 4].reshape([-1, 1]), t_pred[i][..., 4].reshape([-1, 1]))
+        lcls += 300 * (t_pred[i][..., 4].reshape([-1, 1]).mul(BCEcls(s_pred[i][..., 5:].reshape([-1, 80]), t_pred[i][..., 5:].reshape([-1, 80])))).mean()
+        lbox += 0.0001 * (t_pred[i][..., 4].reshape([-1, 1]).mul(BCEbox(s_pred[i][..., :4].reshape([-1, 4]), t_pred[i][..., :4].reshape([-1, 4])))).mean()
+        print(f"{lobj.item()} {lcls.item()} {lbox.item()}")
+
+    return lobj + lcls + lbox
+
+
 def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictionary
     save_dir, epochs, batch_size, weights, single_cls, evolve, data, cfg, resume, noval, nosave, workers, freeze = \
         Path(opt.save_dir), opt.epochs, opt.batch_size, opt.weights, opt.single_cls, opt.evolve, opt.data, opt.cfg, \
@@ -117,6 +136,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     if pretrained:
         with torch_distributed_zero_first(LOCAL_RANK):
             weights = attempt_download(weights)  # download if not found locally
+        print('weights = ', weights)
         ckpt = torch.load(weights, map_location='cpu')  # load checkpoint to CPU to avoid CUDA memory leak
         model = Model(cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
         exclude = ['anchor'] if (cfg or hyp.get('anchors')) and not resume else []  # exclude keys
@@ -126,6 +146,11 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         LOGGER.info(f'Transferred {len(csd)}/{len(model.state_dict())} items from {weights}')  # report
     else:
         model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
+
+    # 加载教师模型，用于知识蒸馏
+    from models.common import DetectMultiBackend
+    model_t = DetectMultiBackend(weights=ROOT / 'yolov5x.pt', device=device)
+    print('成功加载教师模型' + '!' * 100)
 
     # Freeze
     freeze = [f'model.{x}.' for x in (freeze if len(freeze) > 1 else range(freeze[0]))]  # layers to freeze
@@ -295,6 +320,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     scheduler.last_epoch = start_epoch - 1  # do not move
     scaler = amp.GradScaler(enabled=cuda)
     stopper = EarlyStopping(patience=opt.patience)
+
+    # 这里需要增加一个教师模型的设置，用于进行蒸馏
     compute_loss = ComputeLoss(model)  # init loss class
     callbacks.run('on_train_start')
     LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
@@ -349,8 +376,35 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
             # Forward
             with amp.autocast(enabled=cuda):
+
+                # print('imgs.shape = ', imgs.shape)
+
                 pred = model(imgs)  # forward
+                with torch.no_grad():
+                    preds = model_t(imgs).detach()  # forward
+                    pred_t = [preds[:, :3*80*80, :].reshape(16, 3, 80, 80, 85),
+                              preds[:, 3*80*80:3*80*80+3*40*40, :].reshape(16, 3, 40, 40, 85),
+                              preds[:, 3*80*80+3*40*40:, :].reshape(16, 3, 20, 20, 85)]
+
+                # print('Length of (pred) = ', len(pred))
+                # for k in range(len(pred)):
+                #     print(f'pred[{k}].shape = ', pred[k].shape)
+                #
+                # print('Length of (pred_t) = ', len(pred_t))
+                # for k in range(len(pred_t)):
+                #     print(f'pred_t[{k}].shape = ', pred_t[k].shape)
+                #
+                # print(f"Len of target = {colorstr('red', targets.size(0))}  targets.shape = {targets.shape}")
+                # for k in range(4):
+                #     print(f'Example: example of target_{k} = {targets[k]}')
+
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
+                loss_kd = KDLoss(pred_t, pred)
+                print(f"{colorstr('red', loss.item())} {colorstr('red', loss_kd.item())}")
+                loss = loss + loss_kd
+                # print(f"{colorstr('red', pred[0].shape)}  {colorstr('red', pred_t[0].shape)} ")
+                # loss_t, loss_items_t = compute_loss(pred, pred2target(pred=pred_t, n=targets.size(0)))  # 计算教师模型和学生模型的蒸馏损失
+
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
                 if opt.quad:
