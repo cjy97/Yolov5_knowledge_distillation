@@ -73,10 +73,14 @@ def KDLoss(t_pred, s_pred):
     BCEbox = nn.MSELoss(reduction='none')
 
     for i in range(3):
-        lobj += 3.0 * BCEobj(s_pred[i][..., 4].reshape([-1, 1]), t_pred[i][..., 4].reshape([-1, 1]))
-        lcls += 300 * (t_pred[i][..., 4].reshape([-1, 1]).mul(BCEcls(s_pred[i][..., 5:].reshape([-1, 80]), t_pred[i][..., 5:].reshape([-1, 80])))).mean()
-        lbox += 0.0001 * (t_pred[i][..., 4].reshape([-1, 1]).mul(BCEbox(s_pred[i][..., :4].reshape([-1, 4]), t_pred[i][..., :4].reshape([-1, 4])))).mean()
-        print(f"{lobj.item()} {lcls.item()} {lbox.item()}")
+        lobj += 3.0 * BCEobj(s_pred[i][..., 4].reshape([-1, 1]),
+                             t_pred[i][..., 4].reshape([-1, 1]))
+
+        lcls += 300 * (t_pred[i][..., 4].reshape([-1, 1]).mul(BCEcls(s_pred[i][..., 5:].reshape([-1, 80]),
+                                                                     t_pred[i][..., 5:].reshape([-1, 80])))).mean()
+
+        lbox += 0.0001 * (t_pred[i][..., 4].reshape([-1, 1]).mul(BCEbox(s_pred[i][..., :4].reshape([-1, 4]),
+                                                                        t_pred[i][..., :4].reshape([-1, 4])))).mean()
 
     return lobj + lcls + lbox
 
@@ -321,7 +325,6 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     scaler = amp.GradScaler(enabled=cuda)
     stopper = EarlyStopping(patience=opt.patience)
 
-    # 这里需要增加一个教师模型的设置，用于进行蒸馏
     compute_loss = ComputeLoss(model)  # init loss class
     callbacks.run('on_train_start')
     LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
@@ -376,15 +379,13 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
             # Forward
             with amp.autocast(enabled=cuda):
-
-                # print('imgs.shape = ', imgs.shape)
-
                 pred = model(imgs)  # forward
                 with torch.no_grad():
                     preds = model_t(imgs).detach()  # forward
-                    pred_t = [preds[:, :3*80*80, :].reshape(16, 3, 80, 80, 85),
-                              preds[:, 3*80*80:3*80*80+3*40*40, :].reshape(16, 3, 40, 40, 85),
-                              preds[:, 3*80*80+3*40*40:, :].reshape(16, 3, 20, 20, 85)]
+                    bz = preds.size(0)
+                    pred_t = [preds[:, :3*80*80, :].reshape(bz, 3, 80, 80, 85),
+                              preds[:, 3*80*80:3*80*80+3*40*40, :].reshape(bz, 3, 40, 40, 85),
+                              preds[:, 3*80*80+3*40*40:, :].reshape(bz, 3, 20, 20, 85)]
 
                 # print('Length of (pred) = ', len(pred))
                 # for k in range(len(pred)):
@@ -400,7 +401,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
                 loss_kd = KDLoss(pred_t, pred)
-                print(f"{colorstr('red', loss.item())} {colorstr('red', loss_kd.item())}")
+
+                # print(f"{colorstr('red', loss.item())} {colorstr('red', loss_kd.item())}")
                 loss = loss + loss_kd
                 # print(f"{colorstr('red', pred[0].shape)}  {colorstr('red', pred_t[0].shape)} ")
                 # loss_t, loss_items_t = compute_loss(pred, pred2target(pred=pred_t, n=targets.size(0)))  # 计算教师模型和学生模型的蒸馏损失
