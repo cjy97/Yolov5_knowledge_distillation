@@ -62,7 +62,59 @@ RANK = int(os.getenv('RANK', -1))
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 
 
+def fm_nms(pred):
+    k = 3
+    p = pred.copy()
+
+
+    for i in range(3):
+        # p_np = np.array(p[i])
+        # p_w = np.lib.stride_tricks.sliding_window_view(p_np, window_shape=(k, k), axis=(2, 3), writeable=True)
+        p_window = p[i].unfold(2, k, 1).unfold(3, k, 1)
+        # print(np.linalg.norm(p_w - np.array(p_w_torch)))
+
+        # p_window = torch.tensor(p_w)
+        n_batch, n_anchor, n_win_x, n_win_y, n_dim, _, _ = p_window.shape
+        # p_window2 = p_window.view(n_batch*n_anchor*n_win_x*n_win_y*n_dim, k, k)
+        # p_window2[0, :, :] = 0
+
+        # class_p = p_window[5:]
+        # existing_classes = []
+        max_objectness = []
+        max_index = []
+        class_now = torch.argmax(p_window[:, :, :, :, 5:, :, :], dim=4)
+        # existing_classes = torch.unique(class_now.reshape(n_batch, n_anchor, n_win_x, n_win_y, k*k), dim=4)
+
+        p_objectness = p_window[:, :, :, :, 0, :, :]
+        max_of_classes = []
+        # mask_all = np.full_like(p_window, False, dtype=bool)
+        mask_all = torch.full(p_window.shape, False, device='cuda:0')
+        for j in range(80):
+            mask1 = class_now == j
+            p_objectness_filled = p_objectness.masked_fill(mask1==False, 0)
+            max_i = torch.amax(p_objectness_filled.reshape(n_batch, n_anchor, n_win_x, n_win_y, -1), dim=4)
+            # max_of_classes.append(max_i)
+            max_i_viewed = max_i.view(n_batch, n_anchor, n_win_x, n_win_y, 1, 1).expand([n_batch, n_anchor, n_win_x, n_win_y, k, k])
+            mask2 = p_objectness == max_i_viewed
+
+            # 只保留当前类的max_index，其余置0
+            mask = (mask1 & (~mask2))
+            # print(j, torch.sum(mask))
+            # p_objectness.masked_fill_(mask, 0)
+            mask = mask.view(n_batch, n_anchor, n_win_x, n_win_y, 1, k, k).expand([n_batch, n_anchor, n_win_x, n_win_y, n_dim, k, k])
+            # mask = np.array(mask, dtype=bool)
+            mask_all = mask_all | mask
+
+            # p_window.masked_fill_(mask, 0)
+            # p_w[mask] = 0
+
+        p_window.masked_fill_(mask_all, 0)
+
+    return p
+
+
 def KDLoss(t_pred, s_pred):
+    t_pred = fm_nms(t_pred)
     device = s_pred[0].device
     lcls = torch.zeros(1, device=device)  # class loss
     lbox = torch.zeros(1, device=device)  # box loss
@@ -382,10 +434,15 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 pred = model(imgs)  # forward
                 with torch.no_grad():
                     preds = model_t(imgs).detach()  # forward
+
                     bz = preds.size(0)
                     pred_t = [preds[:, :3*80*80, :].reshape(bz, 3, 80, 80, 85),
                               preds[:, 3*80*80:3*80*80+3*40*40, :].reshape(bz, 3, 40, 40, 85),
                               preds[:, 3*80*80+3*40*40:, :].reshape(bz, 3, 20, 20, 85)]
+
+
+
+
 
                 # print('Length of (pred) = ', len(pred))
                 # for k in range(len(pred)):
@@ -460,7 +517,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
             if fi > best_fitness:
                 best_fitness = fi
-            log_vals = list(mloss) + list(results) + lr
+            log_vals = list(mloss) + list(results) + lr + list(loss_kd)
             callbacks.run('on_fit_epoch_end', log_vals, epoch, best_fitness, fi)
 
             # Save model
