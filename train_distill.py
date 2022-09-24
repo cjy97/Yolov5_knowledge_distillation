@@ -26,6 +26,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+import torch.nn.functional as F
 import yaml
 from torch.cuda import amp
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -63,54 +64,62 @@ WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 
 
 def fm_nms(pred):
+    # Cell negightbourhood is 3 * 3
     k = 3
     p = pred.copy()
 
+    # [16, 3, 80, 80, 85] -> [16, 3, 82, 82, 85]
+    for i in range(len(pred)):
+        p[i] = F.pad(p[i], pad=(0, 0, 1, 1, 1, 1))
 
-    for i in range(3):
-        # p_np = np.array(p[i])
-        # p_w = np.lib.stride_tricks.sliding_window_view(p_np, window_shape=(k, k), axis=(2, 3), writeable=True)
+    classes_num = pred[0].size(4) - 1 - 4
+
+    for i in range(len(p)):
+        # unfold method https://pytorch.org/docs/stable/generated/torch.nn.Unfold.html
+        # unfold method https://pytorch.org/docs/stable/generated/torch.Tensor.unfold.html
+        # [16, 3, 82, 82, 85] -> [16, 3, 80, 82, 85, 3] -> [16, 3, 80, 80, 85, 3, 3]
         p_window = p[i].unfold(2, k, 1).unfold(3, k, 1)
-        # print(np.linalg.norm(p_w - np.array(p_w_torch)))
-
-        # p_window = torch.tensor(p_w)
         n_batch, n_anchor, n_win_x, n_win_y, n_dim, _, _ = p_window.shape
-        # p_window2 = p_window.view(n_batch*n_anchor*n_win_x*n_win_y*n_dim, k, k)
-        # p_window2[0, :, :] = 0
 
-        # class_p = p_window[5:]
-        # existing_classes = []
-        max_objectness = []
-        max_index = []
+        # get the classification information of the teacher model result: pred
+        # shape = [16, 3, 80, 80, 3, 3]
         class_now = torch.argmax(p_window[:, :, :, :, 5:, :, :], dim=4)
-        # existing_classes = torch.unique(class_now.reshape(n_batch, n_anchor, n_win_x, n_win_y, k*k), dim=4)
 
+        # get the objectness socre of the teacher model result: pred
+        # shape = [16, 3, 80, 80, 3, 3]
         p_objectness = p_window[:, :, :, :, 0, :, :]
-        max_of_classes = []
-        # mask_all = np.full_like(p_window, False, dtype=bool)
-        mask_all = torch.full(p_window.shape, False, device='cuda:0')
-        for j in range(80):
-            mask1 = class_now == j
-            p_objectness_filled = p_objectness.masked_fill(mask1==False, 0)
-            max_i = torch.amax(p_objectness_filled.reshape(n_batch, n_anchor, n_win_x, n_win_y, -1), dim=4)
-            # max_of_classes.append(max_i)
-            max_i_viewed = max_i.view(n_batch, n_anchor, n_win_x, n_win_y, 1, 1).expand([n_batch, n_anchor, n_win_x, n_win_y, k, k])
-            mask2 = p_objectness == max_i_viewed
 
-            # 只保留当前类的max_index，其余置0
-            mask = (mask1 & (~mask2))
-            # print(j, torch.sum(mask))
-            # p_objectness.masked_fill_(mask, 0)
-            mask = mask.view(n_batch, n_anchor, n_win_x, n_win_y, 1, k, k).expand([n_batch, n_anchor, n_win_x, n_win_y, n_dim, k, k])
-            # mask = np.array(mask, dtype=bool)
-            mask_all = mask_all | mask
+        # mask_all.shape = [16, 3, 80, 80, 85, 3, 3]
+        mask_all = torch.full_like(pred[i], False, dtype=torch.bool)
 
-            # p_window.masked_fill_(mask, 0)
-            # p_w[mask] = 0
+        # enumerate all categories
+        for j in range(classes_num):
+            # mask1 indicates whether the category is j
+            # shape = [16, 3, 80, 80, 3, 3]
+            mask1 = (class_now == j)
+            
+            # p_ojectsness_filled: set 0 if position of p_objectness has no class j object
+            # shape = [16, 3, 80, 80, 3, 3]
+            p_objectness_filled = p_objectness.masked_fill((mask1==False), 0)
 
-        p_window.masked_fill_(mask_all, 0)
+            # torch.amax method https://pytorch.org/docs/stable/generated/torch.amax.html
+            # shape = [16, 3, 80, 80]
+            max_objectness = torch.amax(p_objectness_filled.reshape(n_batch, n_anchor, n_win_x, n_win_y, -1), dim=4)
+            max_objectness_viewed = max_objectness.view(n_batch, n_anchor, n_win_x, n_win_y, 1, 1).expand([n_batch, n_anchor, n_win_x, n_win_y, k, k])
 
-    return p
+            # mask2 indicates whether the objectness is the maximum in the k*k negightbourhood
+            # shape = [16, 3, 80, 80, 3, 3]
+            mask2 = (p_objectness == max_objectness_viewed)
+
+            # shape = [16, 3, 80, 80, 3, 3]
+            mask = mask1 & mask2
+            mask = mask[:, :, :, :, 1, 1]
+            mask = mask.view(n_batch, n_anchor, n_win_x, n_win_y, 1).expand([n_batch, n_anchor, n_win_x, n_win_y, n_dim])
+            mask_all |= mask
+
+        pred[i] = pred[i] * mask_all
+
+    return pred
 
 
 def KDLoss(t_pred, s_pred):
