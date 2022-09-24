@@ -18,6 +18,7 @@ import os
 import random
 import sys
 import time
+import copy
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -66,7 +67,7 @@ WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 def fm_nms(pred):
     # Cell negightbourhood is 3 * 3
     k = 3
-    p = pred.copy()
+    p = copy.deepcopy(pred)
 
     # [16, 3, 80, 80, 85] -> [16, 3, 82, 82, 85]
     for i in range(len(pred)):
@@ -105,7 +106,7 @@ def fm_nms(pred):
             # torch.amax method https://pytorch.org/docs/stable/generated/torch.amax.html
             # shape = [16, 3, 80, 80]
             max_objectness = torch.amax(p_objectness_filled.reshape(n_batch, n_anchor, n_win_x, n_win_y, -1), dim=4)
-            max_objectness_viewed = max_objectness.view(n_batch, n_anchor, n_win_x, n_win_y, 1, 1).expand([n_batch, n_anchor, n_win_x, n_win_y, k, k])
+            max_objectness_viewed = max_objectness.resize(n_batch, n_anchor, n_win_x, n_win_y, 1, 1).expand([n_batch, n_anchor, n_win_x, n_win_y, k, k])
 
             # mask2 indicates whether the objectness is the maximum in the k*k negightbourhood
             # shape = [16, 3, 80, 80, 3, 3]
@@ -114,7 +115,7 @@ def fm_nms(pred):
             # shape = [16, 3, 80, 80, 3, 3]
             mask = mask1 & mask2
             mask = mask[:, :, :, :, 1, 1]
-            mask = mask.view(n_batch, n_anchor, n_win_x, n_win_y, 1).expand([n_batch, n_anchor, n_win_x, n_win_y, n_dim])
+            mask = mask.resize(n_batch, n_anchor, n_win_x, n_win_y, 1).expand([n_batch, n_anchor, n_win_x, n_win_y, n_dim])
             mask_all |= mask
 
         pred[i] = pred[i] * mask_all
