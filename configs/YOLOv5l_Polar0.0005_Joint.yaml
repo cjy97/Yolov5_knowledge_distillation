@@ -1,0 +1,53 @@
+version: 0.1
+
+regularizers:
+  - !PolarizationReg
+    lbd: 0.0005
+    t: 1.
+    upper_bound: 1.
+    ignores:
+      - model\.2\.m\.(\d+)\.cv2\.bn
+      - model\.4\.m\.(\d+)\.cv2\.bn
+      - model\.6\.m\.(\d+)\.cv2\.bn
+      - model\.2\.bn
+      - model\.4\.bn
+      - model\.6\.bn
+      - model\.9\.bn
+      - model\.13\.bn
+      - model\.17\.bn
+      - model\.20\.bn
+      - model\.23\.bn
+      - model\.0\.conv\.bn
+      - model\.8\.cv1\.bn
+      - model\.17\.cv1\.bn
+      - model\.2\.cv1\.bn
+      - model\.4\.cv1\.bn
+      - model\.3\.bn
+      - model\.1\.bn
+
+pruners:
+  - !ChannelPruner
+    ignores:
+      - model\.2\.m\.(\d+)\.cv2\.bn
+      - model\.4\.m\.(\d+)\.cv2\.bn
+      - model\.6\.m\.(\d+)\.cv2\.bn
+      - model\.2\.bn
+      - model\.4\.bn
+      - model\.6\.bn
+      - model\.9\.bn
+      - model\.13\.bn
+      - model\.17\.bn
+      - model\.20\.bn
+      - model\.23\.bn
+      - model\.0\.conv\.bn
+      - model\.8\.cv1\.bn
+      - model\.17\.cv1\.bn
+      - model\.2\.cv1\.bn
+      - model\.4\.cv1\.bn
+      - model\.3\.bn
+      - model\.1\.bn
+
+  - !LayerPruner
+    num_layers: 20
+    threshold: 0.1
+
