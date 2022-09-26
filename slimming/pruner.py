@@ -1,4 +1,5 @@
 import copy
+from datetime import datetime
 from functools import reduce
 from random import sample
 import re
@@ -166,7 +167,14 @@ class LayerPruner(Pruner):
         if model_path:
             print("LayerPruner start save model...")
             ckpt = {
-                'model': model_to_prune
+                'epoch': -1,
+                'best_fitness': None,
+                'model': model_to_prune,
+                'ema': None,
+                'updates': None,
+                'optimizer': None,
+                'wandb_id': None, 
+                'data': datetime.now().isoformat()
             }
             torch.save(ckpt, model_path)
             if verbose:
@@ -702,7 +710,14 @@ class ChannelPruner(Pruner):
         if model_path:
             print("ChanelPruner start save model...")
             ckpt = {
-                'model': model_to_prune
+                'epoch': -1,
+                'best_fitness': None,
+                'model': model_to_prune,
+                'ema': None,
+                'updates': None,
+                'optimizer': None,
+                'wandb_id': None, 
+                'data': datetime.now().isoformat()
             }
             torch.save(ckpt, model_path)
             if verbose:
