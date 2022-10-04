@@ -33,6 +33,8 @@ try:
 except (ImportError, AssertionError):
     wandb = None
 
+wandb = None
+
 try:
     import clearml
 
@@ -164,9 +166,12 @@ class Loggers():
             file = self.save_dir / 'results.csv'
             n = len(x) + 1  # number of cols
             s = '' if file.exists() else (('%20s,' * n % tuple(['epoch'] + self.keys)).rstrip(',') + '\n')  # add header
+            
             with open(file, 'a') as f:
-                f.write(s + ('%20.5g,' * n % tuple([epoch] + vals)).rstrip(',') + '\n')
-
+                # remove one error
+                # f.write(s + ('%20.5g,' * n % tuple([epoch] + vals)).rstrip(',') + '\n')
+                pass
+            
         if self.tb:
             for k, v in x.items():
                 self.tb.add_scalar(k, v, epoch)
