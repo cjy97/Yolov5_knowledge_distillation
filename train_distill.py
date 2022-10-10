@@ -470,10 +470,10 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 #     print(f'Example: example of target_{k} = {targets[k]}')
 
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
-                loss_kd = KDLoss(pred_t, pred)
-
-                # print(f"{colorstr('red', loss.item())} {colorstr('red', loss_kd.item())}")
-                loss = loss + loss_kd
+                if not opt.no_KDLoss:
+                    loss_kd = KDLoss(pred_t, pred)
+                    loss = loss + loss_kd
+                    print("kd")
                 # print(f"{colorstr('red', pred[0].shape)}  {colorstr('red', pred_t[0].shape)} ")
                 # loss_t, loss_items_t = compute_loss(pred, pred2target(pred=pred_t, n=targets.size(0)))  # 计算教师模型和学生模型的蒸馏损失
 
@@ -641,6 +641,8 @@ def parse_opt(known=False):
     parser.add_argument('--upload_dataset', nargs='?', const=True, default=False, help='W&B: Upload data, "val" option')
     parser.add_argument('--bbox_interval', type=int, default=-1, help='W&B: Set bounding-box image logging interval')
     parser.add_argument('--artifact_alias', type=str, default='latest', help='W&B: Version of dataset artifact to use')
+
+    parser.add_argument('--no-KDLoss', action='store_true', help='dont use kd loss')
 
     opt = parser.parse_known_args()[0] if known else parser.parse_args()
     return opt
