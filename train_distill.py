@@ -143,7 +143,7 @@ def KDLoss(t_pred, s_pred):
 
         lbox += 0.0001 * (t_pred[i][..., 4].reshape([-1, 1]).mul(BCEbox(s_pred[i][..., :4].reshape([-1, 4]),
                                                                         t_pred[i][..., :4].reshape([-1, 4])))).mean()
-
+    # print(lobj.item(), lcls.item(), lbox.item())
     return lobj + lcls + lbox
 
 
@@ -471,9 +471,9 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
                 if not opt.no_KDLoss:
-                    loss_kd = KDLoss(pred_t, pred)
+                    loss_kd = KDLoss(pred_t, pred) * opt.kd_lbd
+                    # print("loss = ", loss.item(), " kd_loss = ", loss_kd.item())
                     loss = loss + loss_kd
-                    print("kd")
                 # print(f"{colorstr('red', pred[0].shape)}  {colorstr('red', pred_t[0].shape)} ")
                 # loss_t, loss_items_t = compute_loss(pred, pred2target(pred=pred_t, n=targets.size(0)))  # 计算教师模型和学生模型的蒸馏损失
 
@@ -648,6 +648,8 @@ def parse_opt(known=False):
     parser.add_argument('--artifact_alias', type=str, default='latest', help='W&B: Version of dataset artifact to use')
 
     parser.add_argument('--no-KDLoss', action='store_true', help='dont use kd loss')
+    # set kd_ldb = 40
+    parser.add_argument('--kd_lbd', type=float, default=1.0, help='kd loss ldb, default = 1.0')
 
     opt = parser.parse_known_args()[0] if known else parser.parse_args()
     return opt
