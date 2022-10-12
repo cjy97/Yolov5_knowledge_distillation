@@ -288,6 +288,7 @@ class FilterPruner(Pruner):
             filters = m.weight.data.shape[0]
             num_prune = int(filters * self.sparsity)
             mask = self.calc_mask(m, num_prune)
+            print(num_prune, filters, filters - num_prune)
             self.candidate_mask[name] = mask
 
         return self.candidate_mask
@@ -308,7 +309,17 @@ class FilterPruner(Pruner):
 
         model_to_prune.model[-1].export = False
         if model_path:
-            torch.save(model_to_prune, model_path)
+            ckpt = {
+                'epoch': -1,
+                'best_fitness': None,
+                'model': model_to_prune,
+                'ema': None,
+                'updates': None,
+                'optimizer': None,
+                'wandb_id': None, 
+                'data': datetime.now().isoformat()
+            }
+            torch.save(ckpt, model_path)
             if verbose:
                 print('Pruned model saved to ', model_path)
 
@@ -334,7 +345,8 @@ class L1FilterPruner(FilterPruner):
 
         threshold = torch.topk(w_abs_structured.view(-1),
                                num_prune, largest=False)[0].max()
-        mask_weight = torch.gt(w_abs_structured, threshold).type_as(weight)
+        mask_weight = torch.ge(w_abs_structured, threshold).type_as(weight)
+        print("mask_weight.sum() = ", torch.sum(mask_weight).item())
         mask_bias = mask_weight.clone()
         mask = {'weight_mask': mask_weight.detach(),
                 'bias_mask': mask_bias.detach()}
@@ -565,7 +577,17 @@ class SlimPruner(Pruner):
         model_to_prune.model[-1].export = False
         if model_path:
             print("SlimPruner start save model...")
-            torch.save(model_to_prune, model_path)
+            ckpt = {
+                'epoch': -1,
+                'best_fitness': None,
+                'model': model_to_prune,
+                'ema': None,
+                'updates': None,
+                'optimizer': None,
+                'wandb_id': None, 
+                'data': datetime.now().isoformat()
+            }
+            torch.save(ckpt, model_path)
             if verbose:
                 print('Model saved to ', model_path)
 
@@ -647,14 +669,16 @@ class ChannelPruner(Pruner):
                 k = int(weight.shape[0] * (1 - layer_keep))
                 keep_threshold = torch.topk(
                     weight.view(-1), k, largest=False)[0].max()
-                mask_weight = torch.gt(w_abs, keep_threshold).type_as(weight)
+                mask_weight = torch.ge(w_abs, keep_threshold).type_as(weight)
+
             mask_bias = mask_weight.clone()
+            print('mask.sum() = ', mask_weight.sum().item())
             mask = {'weight_mask': mask_weight.detach(),
                     'bias_mask': mask_bias.detach()}
 
         return mask
 
-    def compress(self, threshold=None, sparsity=None, layer_wise=True, save_dir=None):
+    def compress(self, threshold=None, sparsity=None, layer_wise=True, ratio=False, save_dir=None):
         """
         """
 
@@ -662,7 +686,13 @@ class ChannelPruner(Pruner):
 
         self.candidate_mask = {}
         for name, m in self.candidate:
-            if threshold:
+            if ratio:
+                keep_ratio = 0.2
+                weight = m.weight.data.clone().view(-1)
+                k = int(weight.shape[0] * keep_ratio)
+                threshold = torch.topk(weight, k, largest=True, sorted=True)[0][-1].item()
+                mask = self.calc_mask(m, threshold=threshold)
+            elif threshold:
                 mask = self.calc_mask(m, threshold=threshold)
             elif sparsity:
                 mask = self.calc_mask(m, threshold=self.global_threshold)
@@ -670,7 +700,7 @@ class ChannelPruner(Pruner):
                 mask = self.calc_mask(m, threshold=self.layer_threshold[name])
             else:
                 mask = self.calc_mask(m, threshold=self.adaptive_threshold)
-
+            print(sum(mask['weight_mask']).item() / len(mask['weight_mask']), "\t", name)
             self.candidate_mask[name] = mask
 
         if save_dir:
