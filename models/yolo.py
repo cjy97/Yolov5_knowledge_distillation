@@ -52,6 +52,15 @@ class Detect(nn.Module):
         self.inplace = inplace  # use in-place ops (e.g. slice assignment)
 
     def forward(self, x):
+        
+        # for t in x:
+        #     print("t: ", t.size())
+        #     # print(t)
+        #     if t.dtype == torch.quint8:
+        #         print(t)
+        #         print(t.int_repr().max())
+        #         print(t.int_repr().min())
+
         z = []  # inference output
         for i in range(self.nl):
             x[i] = self.m[i](x[i])  # conv
@@ -129,6 +138,9 @@ class Model(nn.Module):
         self.info()
         LOGGER.info('')
 
+        # self.quant = torch.quantization.QuantStub()     # 输入激活值量化模块
+        # self.dequant = torch.quantization.DeQuantStub() # 输出激活值解量化模块
+
     def forward(self, x, augment=False, profile=False, visualize=False):
         if augment:
             return self._forward_augment(x)  # augmented inference, None
@@ -149,13 +161,23 @@ class Model(nn.Module):
         return torch.cat(y, 1), None  # augmented inference, train
 
     def _forward_once(self, x, profile=False, visualize=False):
+        if 'quant' in self._modules.keys():
+            x = self.quant(x)
+
         y, dt = [], []  # outputs
         for m in self.model:
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
+            # print(type(m))
+            # if isinstance(m, Detect) and 'dequant' in self._modules.keys():
+            #     N = []
+            #     for t in x:
+            #         N.append(self.dequant(t))
+            #     x = N
             x = m(x)  # run
+            # print("x.size(): ", x.size(), x.dtype)
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
