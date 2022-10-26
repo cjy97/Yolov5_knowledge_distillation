@@ -218,7 +218,7 @@ def run(
     print(quant_model._modules)
     model = quant_model
 
-    # torch.save(model.state_dict(), "model_quant.pt")
+    torch.save(model.state_dict(), "model_quant.pt")
 
     #"""
 
