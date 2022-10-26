@@ -43,11 +43,25 @@ class Conv(nn.Module):
         self.bn = nn.BatchNorm2d(c2)
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
+        self.quant = torch.quantization.QuantStub()     # 输入激活值量化模块
+        self.dequant = torch.quantization.DeQuantStub() # 输出激活值解量化模块
+
     def forward(self, x):
         return self.act(self.bn(self.conv(x)))
 
     def forward_fuse(self, x):
-        return self.act(self.conv(x))
+        # return x = self.act(self.conv(x))
+        if 'quant' in self._modules.keys():
+            x = self.quant(x)
+        
+        x = self.conv(x)
+
+        if 'dequant' in self._modules.keys():
+            x = self.dequant(x)
+
+        return self.act(x)
+
+        # return self.act(self.conv(x))
 
 
 class DWConv(Conv):
@@ -101,9 +115,14 @@ class Bottleneck(nn.Module):
         self.cv2 = Conv(c_, c2, 3, 1, g=g)
         self.add = shortcut and c1 == c2
 
-    def forward(self, x):
-        return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
+        self.ff = nn.quantized.FloatFunctional()
 
+    def forward(self, x):
+        # return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
+        if 'ff' in self._modules.keys():
+            return self.ff.add(x, self.cv2(self.cv1(x)) ) if self.add else self.cv2(self.cv1(x))
+        else:
+            return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
 
 class BottleneckCSP(nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks

@@ -26,6 +26,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import copy
 from tqdm import tqdm
 
 FILE = Path(__file__).resolve()
@@ -44,6 +45,7 @@ from utils.metrics import ConfusionMatrix, ap_per_class, box_iou
 from utils.plots import output_to_target, plot_images, plot_val_study
 from utils.torch_utils import select_device, time_sync
 
+from yolo_quant import convert
 
 def save_one_txt(predn, save_conf, shape, file):
     # Save one txt result
@@ -92,6 +94,7 @@ def process_batch(detections, labels, iouv):
     return correct
 
 
+
 @torch.no_grad()
 def run(
         data,
@@ -100,7 +103,7 @@ def run(
         imgsz=640,  # inference size (pixels)
         conf_thres=0.001,  # confidence threshold
         iou_thres=0.6,  # NMS IoU threshold
-        task='val',  # train, val, test, speed or study
+        task='',  # train, val, test, speed or study
         device='',  # cuda device, i.e. 0 or 0,1,2,3 or cpu
         workers=8,  # max dataloader workers (per RANK in DDP mode)
         single_cls=False,  # treat as single-class dataset
@@ -137,6 +140,7 @@ def run(
 
         # Load model
         model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)
+
         stride, pt, jit, engine = model.stride, model.pt, model.jit, model.engine
         imgsz = check_img_size(imgsz, s=stride)  # check image size
         half = model.fp16  # FP16 supported on limited backends with CUDA
@@ -178,6 +182,47 @@ def run(
                                        rect=rect,
                                        workers=workers,
                                        prefix=colorstr(f'{task}: '))[0]
+
+
+    # """
+    print(model._modules)
+    print(model._modules.keys())
+
+    model = convert(model)
+    print(model._modules)
+
+    prepared_model = model
+    # prepared_model = fuse_module(prepared_model)
+    print(prepared_model._modules)
+    
+    prepared_model.qconfig = torch.quantization.get_default_qconfig("fbgemm")
+    # prepare(prepared_model)
+    print(type(prepared_model.model.model[24]))
+    detect_module = copy.deepcopy(prepared_model.model.model[24])   # yolo网络的检测头部分不进行量化，先将其复制出来，
+    torch.quantization.prepare(prepared_model, inplace=True)
+    prepared_model._modules['model']._modules['model']._modules['24'] = detect_module   # 其他部分准备完成后，再复制回去
+    print(type(prepared_model._modules['model']._modules['model']._modules['24']))
+    print(prepared_model._modules)
+    # assert 0
+
+    # feed ...
+    for batch_i, (im, targets, paths, shapes) in enumerate(dataloader):
+        im = im.half() if half else im.float()  # uint8 to fp16/32
+        im /= 255
+        prepared_model(im)
+        print(batch_i)
+        if batch_i>10:
+            break
+
+    quant_model = torch.quantization.convert(prepared_model, inplace=True)
+    print(quant_model._modules)
+    model = quant_model
+
+    # torch.save(model.state_dict(), "model_quant.pt")
+
+    #"""
+
+    
 
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
@@ -328,14 +373,14 @@ def run(
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='dataset.yaml path')
+    parser.add_argument('--data', type=str, default=ROOT / 'data/coco.yaml', help='dataset.yaml path')
     parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model.pt path(s)')
     parser.add_argument('--batch-size', type=int, default=32, help='batch size')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.001, help='confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.6, help='NMS IoU threshold')
     parser.add_argument('--task', default='val', help='train, val, test, speed or study')
-    parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--device', default='cpu', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--workers', type=int, default=8, help='max dataloader workers (per RANK in DDP mode)')
     parser.add_argument('--single-cls', action='store_true', help='treat as single-class dataset')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
